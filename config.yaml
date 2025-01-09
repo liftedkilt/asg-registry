@@ -1,0 +1,15 @@
+server:
+  address: ":8080"
+  read_timeout: 5s
+  write_timeout: 10s
+  idle_timeout: 120s
+  stale_timeout: 90s
+
+
+database:
+  driver: "sqlite3"
+  datasource: "./identifiers.db"
+
+identifiers:
+  patterns:
+    - "test-1-[41-48]-[1-150]"
