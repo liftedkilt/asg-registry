@@ -15,7 +15,7 @@ func main() {
 	}
 
 	// Initialize Database
-	go initDB()
+	initDB()
 
 	defer db.Close()
 

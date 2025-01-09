@@ -1,4 +1,4 @@
-module github.com/liferay/ci-registry
+module github.com/liftedkilt/ci-registry
 
 go 1.22.10
 
