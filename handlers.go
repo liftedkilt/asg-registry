@@ -277,7 +277,6 @@ func identifiersHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
-
 func livenessHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
@@ -300,12 +299,15 @@ func livenessHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var dbClientID string
+	var lastSeen sql.NullTime
+
+	// Step 1: Check if the identifier exists and its current state
 	err := db.QueryRow(`
-		SELECT locked_by 
+		SELECT locked_by, last_seen 
 		FROM identifiers 
 		WHERE identifier = ?`,
 		req.Identifier,
-	).Scan(&dbClientID)
+	).Scan(&dbClientID, &lastSeen)
 
 	if err == sql.ErrNoRows {
 		// Identifier does not exist
@@ -313,29 +315,51 @@ func livenessHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Identifier not found", http.StatusNotFound)
 		return
 	} else if err != nil {
-		log.Printf("Error querying liveness for identifier %s: %v", req.Identifier, err)
+		// Database error
+		log.Printf("Error querying identifier %s: %v", req.Identifier, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
+	// Step 2: Handle stale or unallocated identifiers
+	if dbClientID == "" || (lastSeen.Valid && time.Since(lastSeen.Time) > StaleTimeout) {
+		// Identifier is stale or unallocated; reassociate with the client
+		_, err := db.Exec(`
+			UPDATE identifiers 
+			SET locked_by = ?, last_seen = ?
+			WHERE identifier = ?`,
+			req.ClientID, time.Now(), req.Identifier,
+		)
+
+		if err != nil {
+			log.Printf("Error reassociating identifier %s with client %s: %v", req.Identifier, req.ClientID, err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("Reassociated stale identifier %s with client %s", req.Identifier, req.ClientID)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Step 3: Validate client ownership
 	if dbClientID != req.ClientID {
-		// ClientID does not match the current owner of the identifier
+		// ClientID does not match the current owner
 		log.Printf("Liveness probe mismatch: Identifier %s locked by %s, but %s attempted to claim it",
 			req.Identifier, dbClientID, req.ClientID)
 
-		// Respond with a clear error message
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error":       "Identifier mismatch",
 			"expected_id": dbClientID,
 			"your_id":     req.ClientID,
-			"message":     "Your client_id does not match the current owner of this identifier. Triggering shutdown is recommended.",
+			"message":     "Your client_id does not match the current owner of this identifier.",
 		})
 		return
 	}
 
-	// Update last_seen timestamp for valid liveness probe
+	// Step 4: Update last_seen for valid liveness probe
 	_, err = db.Exec(`
 		UPDATE identifiers 
 		SET last_seen = ?
