@@ -47,28 +47,55 @@ func allocateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var identifier string
+	// Step 1: Check if the client already has an allocated identifier
+	var existingIdentifier string
 	err := db.QueryRow(`
-		UPDATE identifiers 
-		SET locked_by = ?, last_seen = ?
-		WHERE identifier IN (
-			SELECT identifier FROM identifiers WHERE locked_by IS NULL LIMIT 1
-		) RETURNING identifier`,
-		req.ClientID, time.Now(),
-	).Scan(&identifier)
+		SELECT identifier 
+		FROM identifiers 
+		WHERE locked_by = ?`,
+		req.ClientID,
+	).Scan(&existingIdentifier)
 
-	if err == sql.ErrNoRows {
-		http.Error(w, "No available identifiers", http.StatusServiceUnavailable)
+	if err == nil {
+		// Client already has an identifier
+		log.Printf("Client %s already allocated identifier %s", req.ClientID, existingIdentifier)
+		json.NewEncoder(w).Encode(AllocateResponse{Identifier: existingIdentifier})
 		return
-	} else if err != nil {
-		log.Printf("Error allocating identifier: %v", err)
+	} else if err != sql.ErrNoRows {
+		// Other database error
+		log.Printf("Error checking existing allocation for client %s: %v", req.ClientID, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("New client registered: ClientID=%s, Identifier=%s", req.ClientID, identifier)
-	json.NewEncoder(w).Encode(AllocateResponse{Identifier: identifier})
+	// Step 2: Allocate a new identifier if none exists
+	var newIdentifier string
+	err = db.QueryRow(`
+		UPDATE identifiers 
+		SET locked_by = ?, last_seen = ?
+		WHERE identifier IN (
+			SELECT identifier FROM identifiers WHERE locked_by IS NULL LIMIT 1
+		)
+		RETURNING identifier`,
+		req.ClientID, time.Now(),
+	).Scan(&newIdentifier)
+
+	if err == sql.ErrNoRows {
+		// No available identifiers
+		log.Printf("Allocation failed: No available identifiers for client %s", req.ClientID)
+		http.Error(w, "No available identifiers", http.StatusServiceUnavailable)
+		return
+	} else if err != nil {
+		// Other database error
+		log.Printf("Error allocating identifier for client %s: %v", req.ClientID, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("New identifier allocated: ClientID=%s, Identifier=%s", req.ClientID, newIdentifier)
+	json.NewEncoder(w).Encode(AllocateResponse{Identifier: newIdentifier})
 }
+
 
 func allocatedHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
