@@ -47,6 +47,11 @@ func allocateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.ClientID == "" {
+		http.Error(w, "client_id is required", http.StatusBadRequest)
+		return
+	}
+
 	// Step 1: Check if the client already has an allocated identifier
 	var existingIdentifier string
 	err := db.QueryRow(`
@@ -95,7 +100,6 @@ func allocateHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("New identifier allocated: ClientID=%s, Identifier=%s", req.ClientID, newIdentifier)
 	json.NewEncoder(w).Encode(AllocateResponse{Identifier: newIdentifier})
 }
-
 
 func allocatedHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -287,6 +291,11 @@ func livenessHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.ClientID == "" || req.Identifier == "" {
+		http.Error(w, "client_id and identifier are required", http.StatusBadRequest)
 		return
 	}
 
